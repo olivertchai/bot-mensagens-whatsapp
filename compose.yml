@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  # 1. Banco de Dados PostgreSQL
+  db:
+    image: postgres:15-alpine
+    container_name: whatsapp_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: whatsapp
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secretpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # 2. Serviço em Go (whatsmeow)
+  go-whatsapp:
+    build:
+      context: ./go-whatsapp
+      dockerfile: Dockerfile
+    container_name: whatsapp_go_api
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=admin
+      - DB_PASSWORD=secretpassword
+      - DB_NAME=whatsapp
+    depends_on:
+      - db
+
+  # 3. Aplicação Laravel (PHP 8.2 + Apache)
+  laravel-app:
+    image: php:8.2-apache
+    container_name: whatsapp_laravel
+    restart: unless-stopped
+    ports:
+      - "8000:80"
+    volumes:
+      - ./laravel-app:/var/www/html
+    environment:
+      - DB_CONNECTION=pgsql
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_DATABASE=whatsapp
+      - DB_USERNAME=admin
+      - DB_PASSWORD=secretpassword
+    depends_on:
+      - db
+    # Comando para habilitar o mod_rewrite do Apache (necessário pro Laravel)
+    command: bash -c "a2enmod rewrite && docker-php-entrypoint apache2-foreground"
+
+# Persistência de dados do banco
+volumes:
+  postgres_data:
