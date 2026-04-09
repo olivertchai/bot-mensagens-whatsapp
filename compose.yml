@@ -33,9 +33,11 @@ services:
     depends_on:
       - db
 
-  # 3. Aplicação Laravel (PHP 8.2 + Apache)
+  # 3. Aplicação Laravel (PHP 8.3 + Apache)
   laravel-app:
-    image: php:8.2-apache
+    build:
+      context: ./laravel-app
+      dockerfile: Dockerfile
     container_name: whatsapp_laravel
     restart: unless-stopped
     ports:
@@ -51,9 +53,15 @@ services:
       - DB_PASSWORD=secretpassword
     depends_on:
       - db
-    # Comando para habilitar o mod_rewrite do Apache (necessário pro Laravel)
-    command: bash -c "a2enmod rewrite && docker-php-entrypoint apache2-foreground"
-
+    # Comando para ajustar permissões, apontar o Apache para a pasta public e iniciar o servidor
+# Comando para ajustar permissões, executar migrações, apontar o Apache para a pasta public e iniciar o servidor
+    command: >
+      bash -c "mkdir -p /var/www/html/storage/framework/views /var/www/html/storage/framework/cache /var/www/html/storage/framework/sessions
+      && chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
+      && chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
+      && sed -i 's!/var/www/html!/var/www/html/public!g' /etc/apache2/sites-available/000-default.conf
+      && php artisan migrate --force
+      && docker-php-entrypoint apache2-foreground"
 # Persistência de dados do banco
 volumes:
   postgres_data:
