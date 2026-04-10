@@ -23,3 +23,7 @@ Para testar o Laravel: Acesse http://localhost:8000 (Você deve ver a tela inici
 
 Para testar o Go: Acesse http://localhost:8080/api/status (Você deve ver o JSON {"status":"waiting_qr","qr_string":"..."}).
 ```
+
+<img width="913" height="787" alt="image" src="https://github.com/user-attachments/assets/a7ebcf4d-fad4-4597-bcab-48cd8d81804c" />
+<img width="913" height="787" alt="image" src="https://github.com/user-attachments/assets/ff48662f-87df-4550-8aac-1f77288905e8" />
+
