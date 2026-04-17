@@ -10,91 +10,115 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	waLog "go.mau.fi/whatsmeow/util/log"
+	"google.golang.org/protobuf/proto"
 
-	_ "github.com/lib/pq" // Driver do PostgreSQL
+	_ "github.com/lib/pq"
 )
 
 var client *whatsmeow.Client
 var qrCodeString string
 
 func main() {
-	// 1. Configurar loggers para o whatsmeow
 	dbLog := waLog.Stdout("Database", "DEBUG", true)
 	clientLog := waLog.Stdout("Client", "DEBUG", true)
 
-	// 2. Montar a string de conexão com o banco pegando do docker-compose
 	dbConn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
 		os.Getenv("DB_HOST"), os.Getenv("DB_PORT"),
 		os.Getenv("DB_USER"), os.Getenv("DB_PASSWORD"), os.Getenv("DB_NAME"))
 
-	// 3. Conectar ao banco de dados para armazenar a sessão do WhatsApp
-	// ATUALIZAÇÃO: Agora exige context.TODO() no início
 	container, err := sqlstore.New(context.TODO(), "postgres", dbConn, dbLog)
 	if err != nil {
 		log.Fatal("Erro ao conectar no banco de dados:", err)
 	}
 
-	// ATUALIZAÇÃO: Agora exige context.TODO() também aqui
 	deviceStore, err := container.GetFirstDevice(context.TODO())
 	if err != nil {
 		log.Fatal("Erro ao buscar dispositivo:", err)
 	}
 
-	// 4. Criar o cliente do whatsmeow
 	client = whatsmeow.NewClient(deviceStore, clientLog)
-
-	// 5. Iniciar o processo de conexão/QR Code em segundo plano (Goroutine)
 	go startWhatsAppConnection()
 
-	// 6. Criar a Rota da API para o Laravel consultar o Status
+	// ROTA 1: Status da conexão
 	http.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-
 		status := "waiting_qr"
 		if client.IsConnected() && client.IsLoggedIn() {
 			status = "connected"
 		}
-
-		resposta := map[string]string{
+		json.NewEncoder(w).Encode(map[string]string{
 			"status":    status,
 			"qr_string": qrCodeString,
+		})
+	})
+
+	// ROTA 2: Disparo de Mensagem (NOVO)
+	http.HandleFunc("/api/send", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Método não permitido", http.StatusMethodNotAllowed)
+			return
 		}
 
-		json.NewEncoder(w).Encode(resposta)
+		// Recebe os dados em JSON (telefone e mensagem)
+		var payload struct {
+			Phone   string `json:"phone"`
+			Message string `json:"message"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			http.Error(w, "JSON inválido", http.StatusBadRequest)
+			return
+		}
+
+		// O WhatsApp identifica os números no formato: 5511999999999@s.whatsapp.net
+		targetJID := types.NewJID(payload.Phone, types.DefaultUserServer)
+
+		// Monta a estrutura de texto nativa do WhatsApp
+		msg := &waE2E.Message{
+			Conversation: proto.String(payload.Message),
+		}
+
+		// Faz o disparo!
+		resp, err := client.SendMessage(context.Background(), targetJID, msg)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Erro ao enviar: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "success",
+			"message_id": resp.ID,
+		})
 	})
 
 	porta := ":8080"
 	fmt.Println("🚀 Servidor Go rodando na porta", porta)
 	if err := http.ListenAndServe(porta, nil); err != nil {
-		log.Fatal("Erro ao iniciar o servidor Go: ", err)
+		log.Fatal("Erro ao iniciar servidor Go: ", err)
 	}
 }
 
 func startWhatsAppConnection() {
 	if client.Store.ID == nil {
-		// Se for a primeira vez (não tem sessão), ele pede o QR Code
 		qrChan, _ := client.GetQRChannel(context.Background())
 		err := client.Connect()
 		if err != nil {
 			log.Fatal("Erro ao conectar o whatsmeow:", err)
 		}
-		
-		// Fica escutando o canal para receber as atualizações do QR Code
 		for evt := range qrChan {
 			if evt.Event == "code" {
-				qrCodeString = evt.Code // Atualiza a string global
+				qrCodeString = evt.Code
 				fmt.Println("Novo QR Code gerado!")
-			} else {
-				fmt.Println("Evento de Login:", evt.Event)
 			}
 		}
 	} else {
-		// Se já tem sessão salva no banco, apenas conecta
 		err := client.Connect()
 		if err != nil {
 			log.Fatal("Erro ao conectar sessão existente:", err)
 		}
-		fmt.Println("WhatsApp já estava logado e conectado com sucesso!")
+		fmt.Println("WhatsApp conectado usando a sessão do banco!")
 	}
 }
